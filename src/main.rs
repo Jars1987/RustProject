@@ -13,7 +13,7 @@ struct Record {
     email: Option<String>,
 }   
 
-#[derive(Debug)]
+#[derive(Debug)] 
 struct Records {
     inner: HashMap<i64, Record>
 }   
@@ -34,6 +34,60 @@ impl Records {
         records.sort_by_key(|rec| rec.id);
         records
     }
+
+    fn next_id (&self) -> i64 {
+        let mut ids: Vec<_> = self.inner.keys().collect();
+        ids.sort();
+        match ids.pop(){
+            Some(id) => id +1,
+            None => 1,
+        }
+    }
+
+    fn search_record (&self, name: &str) -> Vec<&Record> {
+        self.inner
+            .values()
+            .filter(|rec| rec.name.to_lowercase().contains(&name.to_lowercase()))
+            .collect()
+    }
+
+    fn remove (&mut self, id: i64) -> Option<Record> {
+        self.inner.remove(&id)
+    }
+
+    fn edit (&mut self, id: i64, name: &str, email: Option<String>) -> Option<Record> {
+        self.inner.insert(id, Record {
+            id,
+            name: name.to_string(),
+            email
+        })
+    }
+}
+
+fn save_records (file_name: PathBuf, records:Records) -> std::io::Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .truncate(true) //when we truncate we erase all the data, but thats ok cause that has been loaded in "records"
+        .open(file_name)?;
+
+    // write accepts bites. Using "b" before the string will pass bytes instead of a string
+    // So we are now writing the first sentence on the top of th file
+    file.write(b"id,name,email\n")?;
+
+    for record in records.into_vec().into_iter() {
+        let email = match record.email {
+            Some(email) => email,
+            None => "".to_string(),
+        };
+
+
+        let line = format!("{},{},{}\n", record.id, record.name, email);
+        file.write(line.as_bytes())?;
+    };
+
+    //flush wont return untill the data has been successfully written or it fails
+    file.flush()?;
+    Ok(())
 }
 
 #[derive(Error, Debug)]
@@ -109,7 +163,22 @@ struct Opt {
 #[derive(StructOpt, Debug)]
 //subcommands can't be regular enums, has to be struct enums
 enum Command {
-    List{}
+    List{},
+    Add{
+        name: String,
+        email: Option<String>,
+    },
+    Search {
+        query: String,
+    },
+    Remove {
+        id: i64
+    },
+    Edit {
+        id: i64,
+        name: String,
+        email: Option<String>,
+    }
 }
 
 fn run(opt: Opt) -> Result<(), std::io::Error> {
@@ -119,7 +188,39 @@ fn run(opt: Opt) -> Result<(), std::io::Error> {
             for record in recs.into_vec() {
                 println!("{:?}", record);
             }
-        }   
+        }   ,
+        Command::Add {name, email} => {
+            let mut recs = load_records(opt.data_file.clone(), opt.verbose)?;
+            let next_id = recs.next_id();
+            recs.add(Record {id: next_id, name, email});
+            save_records(opt.data_file, recs )?;
+        }
+        Command::Search { query } => {
+            let recs = load_records(opt.data_file, opt.verbose)?;
+            let results = recs.search_record(&query);
+            if results.is_empty() {
+                println!("No records found")
+            } else {
+                for rec in results { 
+                    println!("{:?}", rec)
+                }
+            }
+        }
+        Command::Remove { id } => {
+            let mut recs = load_records(opt.data_file.clone(), opt.verbose)?;
+            if recs.remove(id).is_some(){
+                save_records(opt.data_file, recs)?;
+                println!("Record deleted")
+            } else {
+                println!("Record not found")
+            }
+        }
+
+        Command::Edit { id, name, email } => {
+            let mut recs = load_records(opt.data_file.clone(), opt.verbose)?;
+            recs.edit(id, &name, email);
+            save_records (opt.data_file, recs)?;
+        }
     }
     Ok(())
 }
